@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Cost Real-Time Calculator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @keyframes pulse-cost { 0%,100%{opacity:1} 50%{opacity:0.7} }
+  .cost-pulse { animation: pulse-cost 1s ease-in-out infinite; }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen p-4">
+<h1 class="text-2xl font-bold text-cyan-400 mb-1 text-center">Meeting Cost Real-Time Calculator</h1>
+<p class="text-center text-gray-400 text-sm mb-6">Watch the cost tick up live as your meeting runs</p>
+
+<div class="max-w-2xl mx-auto space-y-5">
+  <!-- Config -->
+  <div class="bg-gray-900 rounded-xl border border-gray-700 p-5 space-y-4">
+    <div>
+      <label class="flex justify-between text-xs text-gray-400 mb-2">
+        <span class="uppercase tracking-wider">Attendees</span>
+        <span id="attendeeLabel" class="text-cyan-300 font-mono font-bold text-base">10</span>
+      </label>
+      <input id="attendees" type="range" min="2" max="50" value="10"
+        class="w-full h-3 rounded-full cursor-pointer accent-cyan-500">
+      <div class="flex justify-between text-xs text-gray-600 mt-1"><span>2</span><span>50</span></div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider" for="salary">Avg Annual Salary</label>
+        <input id="salary" type="number" value="80000" min="1000"
+          class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm font-mono focus:outline-none focus:border-cyan-500">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-400 mb-1 uppercase tracking-wider" for="currency">Currency</label>
+        <select id="currency" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-cyan-500">
+          <option value="USD">$ USD</option>
+          <option value="EUR">€ EUR</option>
+          <option value="GBP">£ GBP</option>
+          <option value="JPY">¥ JPY</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timer display -->
+  <div class="bg-gray-900 rounded-xl border border-gray-700 p-6 text-center space-y-2">
+    <div class="text-gray-400 text-xs uppercase tracking-wider">Meeting Duration</div>
+    <div id="timerDisplay" class="text-5xl font-mono font-bold text-white tracking-widest">00:00:00</div>
+
+    <div id="costDisplay" class="text-6xl font-mono font-bold text-red-400 mt-2 cost-pulse tracking-tight" style="animation-play-state:paused">
+      <span id="currSymbol">$</span><span id="costVal">0.00</span>
+    </div>
+    <div class="text-xs text-gray-500">real-time meeting cost</div>
+
+    <!-- Controls -->
+    <div class="flex gap-3 justify-center mt-4">
+      <button id="btnStart" class="px-6 py-2.5 bg-green-700 hover:bg-green-600 rounded-lg font-semibold transition flex items-center gap-2">▶ Start</button>
+      <button id="btnStop" class="px-6 py-2.5 bg-yellow-700 hover:bg-yellow-600 rounded-lg font-semibold transition" disabled>⏸ Pause</button>
+      <button id="btnReset" class="px-6 py-2.5 bg-red-800 hover:bg-red-700 rounded-lg font-semibold transition">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- Projections -->
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3" id="projections">
+    <div class="bg-gray-900 rounded-xl border border-gray-700 p-4 text-center">
+      <div class="text-xs text-gray-400 mb-1">Cost per Minute</div>
+      <div id="perMin" class="text-lg font-mono text-yellow-300">—</div>
+    </div>
+    <div class="bg-gray-900 rounded-xl border border-gray-700 p-4 text-center">
+      <div class="text-xs text-gray-400 mb-1">Projected 1h Cost</div>
+      <div id="proj1h" class="text-lg font-mono text-orange-300">—</div>
+    </div>
+    <div class="bg-gray-900 rounded-xl border border-gray-700 p-4 text-center">
+      <div class="text-xs text-gray-400 mb-1">Annual (if weekly 1h)</div>
+      <div id="projAnnual" class="text-lg font-mono text-red-400">—</div>
+    </div>
+  </div>
+
+  <!-- Cost milestones -->
+  <div class="bg-gray-900 rounded-xl border border-gray-700 p-4">
+    <div class="text-xs text-gray-400 uppercase tracking-wider mb-3">Cost Milestones</div>
+    <div id="milestones" class="space-y-1 text-sm"></div>
+  </div>
+</div>
+
+<script>
+const symbols = { USD:'$', EUR:'€', GBP:'£', JPY:'¥' };
+let elapsed = 0; // seconds
+let running = false;
+let interval = null;
+let startTs = null;
+let pausedElapsed = 0;
+
+function getCostPerSecond() {
+  const n = parseInt(document.getElementById('attendees').value);
+  const s = parseFloat(document.getElementById('salary').value);
+  const workHoursPerYear = 2080;
+  const costPerPersonPerSec = s / (workHoursPerYear * 3600);
+  return n * costPerPersonPerSec;
+}
+
+function formatTime(secs) {
+  const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/60), s=Math.floor(secs%60);
+  return [h,m,s].map(v=>String(v).padStart(2,'0')).join(':');
+}
+
+function formatCost(val) {
+  const cur = document.getElementById('currency').value;
+  const sym = symbols[cur]||'$';
+  if (cur==='JPY') return sym + Math.round(val).toLocaleString();
+  if (val >= 10000) return sym + val.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  if (val >= 100) return sym + val.toFixed(2);
+  return sym + val.toFixed(2);
+}
+
+function updateDisplay() {
+  const cost = elapsed * getCostPerSecond();
+  document.getElementById('timerDisplay').textContent = formatTime(elapsed);
+  document.getElementById('costVal').textContent = formatCost(cost).slice(1);
+  document.getElementById('currSymbol').textContent = symbols[document.getElementById('currency').value]||'$';
+
+  const perMin = getCostPerSecond() * 60;
+  const proj1h = getCostPerSecond() * 3600;
+  document.getElementById('perMin').textContent = formatCost(perMin) + '/min';
+  document.getElementById('proj1h').textContent = formatCost(proj1h);
+  document.getElementById('projAnnual').textContent = formatCost(proj1h * 52);
+
+  // Milestones
+  const marks = [10,50,100,500,1000,5000,10000];
+  const ms = document.getElementById('milestones');
+  ms.innerHTML='';
+  marks.forEach(m => {
+    const timeToReach = m / getCostPerSecond();
+    const reached = cost >= m;
+    const div = document.createElement('div');
+    div.className = `flex justify-between items-center px-2 py-1 rounded ${reached?'bg-red-950 text-red-300':'text-gray-400'}`;
+    div.innerHTML = `<span>${reached?'✓ ':''}<span class="font-mono">${formatCost(m)}</span></span><span class="font-mono text-xs">${formatTime(Math.round(timeToReach))}</span>`;
+    ms.appendChild(div);
+  });
+}
+
+document.getElementById('attendees').addEventListener('input', e => {
+  document.getElementById('attendeeLabel').textContent = e.target.value;
+  updateDisplay();
+});
+document.getElementById('salary').addEventListener('input', updateDisplay);
+document.getElementById('currency').addEventListener('change', updateDisplay);
+
+document.getElementById('btnStart').addEventListener('click', () => {
+  if (running) return;
+  running = true;
+  startTs = Date.now() - pausedElapsed * 1000;
+  interval = setInterval(() => {
+    elapsed = Math.floor((Date.now() - startTs) / 1000);
+    updateDisplay();
+  }, 200);
+  document.getElementById('costDisplay').style.animationPlayState = 'running';
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnStop').disabled = false;
+  document.getElementById('btnStart').classList.add('opacity-50');
+});
+
+document.getElementById('btnStop').addEventListener('click', () => {
+  if (!running) return;
+  running = false;
+  clearInterval(interval);
+  pausedElapsed = elapsed;
+  document.getElementById('costDisplay').style.animationPlayState = 'paused';
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  document.getElementById('btnStart').classList.remove('opacity-50');
+  document.getElementById('btnStart').textContent = '▶ Resume';
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+  running = false;
+  clearInterval(interval);
+  elapsed = 0;
+  pausedElapsed = 0;
+  startTs = null;
+  document.getElementById('costDisplay').style.animationPlayState = 'paused';
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  document.getElementById('btnStart').classList.remove('opacity-50');
+  document.getElementById('btnStart').textContent = '▶ Start';
+  updateDisplay();
+});
+
+updateDisplay();
+</script>
+</body>
+</html>
